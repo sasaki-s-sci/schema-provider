@@ -1,0 +1,97 @@
+name: Publish Schema
+
+on:
+    push:
+        branches: [main]
+
+env:
+    NODE_VERSION: "20"
+    PACKAGE_DIR: schema-provider
+    PACKAGE_NAME: "@sasaki-s-sci/schema-provider"
+    BRANCH_NAME_PREFIX: "Schema-update"
+
+jobs:
+    # Publish npm package to the Github packages (Private)
+    publish-package:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        outputs:
+            version: ${{ steps.version.outputs.version }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  registry-url: "https://npm.pkg.github.com"
+
+            - name: Install and Build
+              working-directory: ${{ env.PACKAGE_DIR }}
+              run: |
+                  npm ci
+                  npm run build
+
+            - name: Publish to GitHub Packages
+              id: version
+              working-directory: ${{ env.PACKAGE_DIR }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  VERSION="0.0.$(date +'%Y%m%d%H%M%S')"
+                  echo "version=${VERSION}" >> $GITHUB_OUTPUT
+                  npm version ${VERSION} --no-git-tag-version
+                  npm publish
+
+    # Publish an update PR to the latest version raised by publish-package (job) to multiple Repos
+    create-pr:
+        needs: publish-package
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                # This is compatible with repositories
+                consumer:
+                    - repo: sasaki-s-sci/schema-consumer
+                      package_dir: schema-consumer
+                      base_branch: basic-codes
+                    # You can add other repos. <User>/<Repo> or <Org>/<Repo>
+                    # - repo: sasaki-s-sci/another-consumer
+                    #   package_dir: app
+                    #   base_branch: main
+        env:
+            VERSION: ${{ needs.publish-package.outputs.version }}
+        steps:
+            - name: Checkout consumer repo
+              uses: actions/checkout@v4
+              with:
+                  repository: ${{ matrix.consumer.repo }}
+                  token: ${{ secrets.CONSUMER_REPO_PAT }}
+                  ref: ${{ matrix.consumer.base_branch }}
+
+            - name: Create branch and update version
+              working-directory: ${{ matrix.consumer.package_dir }}
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+                  BRANCH_NAME="${{env.BRANCH_NAME_PREFIX}}-${{ env.VERSION }}"
+                  git checkout -b "${BRANCH_NAME}"
+
+                  npm pkg set "dependencies.${{ env.PACKAGE_NAME }}=${{ env.VERSION }}"
+
+                  git add package.json
+                  git commit -m "chore: update ${{ env.PACKAGE_NAME }} to ${{ env.VERSION }}"
+                  git push origin "${BRANCH_NAME}"
+
+            - name: Create Pull Request
+              env:
+                  GH_TOKEN: ${{ secrets.CONSUMER_REPO_PAT }}
+              run: |
+                  gh pr create \
+                    --repo ${{ matrix.consumer.repo }} \
+                    --title "chore: update ${{ env.PACKAGE_NAME }} to ${{ env.VERSION }}" \
+                    --body "Automated PR to update ${{ env.PACKAGE_NAME }} to version ${{ env.VERSION }}" \
+                    --base ${{ matrix.consumer.base_branch }} \
+                    --head "${{ env.BRANCH_NAME_PREFIX }}-${{ env.VERSION }}"
