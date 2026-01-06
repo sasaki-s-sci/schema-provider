@@ -55,7 +55,7 @@ jobs:
                 consumer:
                     - repo: sasaki-s-sci/schema-consumer
                       package_dir: schema-consumer
-                      base_branch: basic-codes
+                      base_branch: main
                     # You can add other repos. <User>/<Repo> or <Org>/<Repo>
                     # - repo: sasaki-s-sci/another-consumer
                     #   package_dir: app
